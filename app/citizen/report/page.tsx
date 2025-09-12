@@ -146,7 +146,8 @@ export default function ReportIssuePage() {
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
     const address = await fetchAddress(formData.location.lat, formData.location.lng)
-    const mapImageUrl = `https://staticmap.openstreetmap.de/staticmap.php?center=${formData.location.lat},${formData.location.lng}&zoom=15&size=300x300&markers=${formData.location.lat},${formData.location.lng},red-pushpin`
+    const mapImageUrl = `https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s+ff0000(${formData.location.lng},${formData.location.lat})/${formData.location.lng},${formData.location.lat},15/300x300?access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}`
+
 
     // Add placeholders
     const placeholders: MediaFile[] = files.map((file) => ({
@@ -231,12 +232,13 @@ export default function ReportIssuePage() {
       ward: formData.ward,
       geo: formData.location,
       media: selectedFiles.map((item, index) => ({
-        id: `media-${Date.now()}-${index}`,
-        uri: item.preview,
-        type: item.file.type.startsWith("image/") ? "image" : "video",
-        size: item.file.size,
-      })),
+      id: `media-${Date.now()}-${index}`,
+      uri: item.preview,  // ✅ must be "uri"
+      type: item.file.type.startsWith("image/") ? ("image" as const) : ("video" as const),
+      size: item.file.size,
+    })),
     }
+
     const ticket = await createTicket(ticketData)
     if (ticket) router.push(`/citizen/reports?new=${ticket.id}`)
   }
@@ -286,6 +288,22 @@ export default function ReportIssuePage() {
                   {WARDS.map(w => <SelectItem key={w} value={w}>{w}</SelectItem>)}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Severity */}
+            <div className="space-y-2">
+              <Label>Severity</Label>
+              <div className="flex items-center gap-4">
+                <Slider
+                  value={[formData.severity]}
+                  onValueChange={(value) => setFormData({ ...formData, severity: value[0] as Severity })}
+                  min={1}
+                  max={5}
+                  step={1}
+                  className="w-2/3"
+                />
+                <Badge variant="outline">{SEVERITY_LABELS[formData.severity]}</Badge>
+              </div>
             </div>
 
             {/* Location */}
