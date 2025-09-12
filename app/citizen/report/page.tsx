@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -32,25 +31,80 @@ export default function ReportIssuePage() {
     category: "" as Category | "",
     severity: 3 as Severity,
     ward: "",
-    location: { lat: 28.6139, lng: 77.209 }, // Default to Delhi coordinates
+    location: { lat: 28.6139, lng: 77.209 }, // Default to Delhi
   })
 
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
-  const [step, setStep] = useState(1) // 1: Form, 2: AI Processing, 3: Review & Submit
+  const [step, setStep] = useState(1)
   const [locationStatus, setLocationStatus] = useState<"idle" | "loading" | "success" | "error">("idle")
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+  // --- Helper: Stamp GPS on image ---
+  const addGeoStampToImage = async (file: File, lat: number, lng: number): Promise<File> => {
+    return new Promise((resolve) => {
+      const img = new Image()
+      const reader = new FileReader()
+
+      reader.onload = (e) => {
+        img.src = e.target?.result as string
+      }
+      reader.readAsDataURL(file)
+
+      img.onload = () => {
+        const canvas = document.createElement("canvas")
+        const ctx = canvas.getContext("2d")!
+        canvas.width = img.width
+        canvas.height = img.height
+
+        // Draw original image
+        ctx.drawImage(img, 0, 0)
+
+        // Add GPS text overlay
+        ctx.font = "48px Arial"
+        ctx.fillStyle = "yellow"
+        ctx.strokeStyle = "black"
+        ctx.lineWidth = 3
+        const text = `Lat: ${lat.toFixed(5)}, Lng: ${lng.toFixed(5)}`
+        const x = 20
+        const y = canvas.height - 40
+        ctx.strokeText(text, x, y)
+        ctx.fillText(text, x, y)
+
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const stampedFile = new File([blob], file.name, { type: file.type })
+            resolve(stampedFile)
+          } else {
+            resolve(file)
+          }
+        }, file.type)
+      }
+    })
+  }
+
+  // --- File selection ---
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
-    setSelectedFiles((prev) => [...prev, ...files].slice(0, 3)) // Max 3 files
+    const processedFiles: File[] = []
+
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        const stamped = await addGeoStampToImage(file, formData.location.lat, formData.location.lng)
+        processedFiles.push(stamped)
+      } else {
+        processedFiles.push(file)
+      }
+    }
+
+    setSelectedFiles((prev) => [...prev, ...processedFiles].slice(0, 3))
   }
 
   const removeFile = (index: number) => {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index))
   }
 
+  // --- Location capture ---
   const getCurrentLocation = () => {
     setLocationStatus("loading")
-
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -67,19 +121,18 @@ export default function ReportIssuePage() {
           console.error("Geolocation error:", error)
           setLocationStatus("error")
         },
-        { enableHighAccuracy: true, timeout: 10000 },
+        { enableHighAccuracy: true, timeout: 10000 }
       )
     } else {
       setLocationStatus("error")
     }
   }
 
+  // --- AI processing ---
   const handleAIProcessing = async () => {
     if (!formData.category || !formData.title) return
-
     setStep(2)
 
-    // Perform AI triage
     await performTriage({
       category: formData.category,
       title: formData.title,
@@ -87,7 +140,6 @@ export default function ReportIssuePage() {
       geo: formData.location,
     })
 
-    // Check for duplicates
     await checkDuplicate({
       category: formData.category,
       geo: formData.location,
@@ -97,9 +149,10 @@ export default function ReportIssuePage() {
     setStep(3)
   }
 
+  // --- Submit ---
   const handleSubmit = async () => {
     const ticketData = {
-      reporterId: "user-1", // Mock user ID
+      reporterId: "user-1",
       title: formData.title,
       description: formData.description,
       category: formData.category as Category,
@@ -115,7 +168,6 @@ export default function ReportIssuePage() {
     }
 
     const ticket = await createTicket(ticketData)
-
     if (ticket) {
       router.push(`/citizen/reports?new=${ticket.id}`)
     }
@@ -131,7 +183,7 @@ export default function ReportIssuePage() {
         <p className="text-muted-foreground">Help improve your community by reporting civic issues</p>
       </div>
 
-      {/* Progress Steps */}
+      {/* Steps */}
       <div className="flex items-center justify-center space-x-4 mb-8">
         {[1, 2, 3].map((stepNum) => (
           <div key={stepNum} className="flex items-center">
@@ -301,19 +353,46 @@ export default function ReportIssuePage() {
                   className="hidden"
                 />
 
+                {/* Geo-tag Preview Section */}
                 {selectedFiles.length > 0 && (
-                  <div className="grid grid-cols-2 gap-2">
-                    {selectedFiles.map((file, index) => (
-                      <div key={index} className="relative border border-border rounded-lg p-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm truncate">{file.name}</span>
-                          <Button type="button" variant="ghost" size="sm" onClick={() => removeFile(index)}>
-                            ×
-                          </Button>
+                  <div className="grid grid-cols-2 gap-4 mt-4">
+                    {selectedFiles.map((file, index) => {
+                      const previewUrl = URL.createObjectURL(file)
+                      return (
+                        <div
+                          key={index}
+                          className="relative border border-border rounded-lg overflow-hidden shadow-md"
+                        >
+                          {file.type.startsWith("image/") ? (
+                            <img
+                              src={previewUrl}
+                              alt={file.name}
+                              className="w-full h-40 object-cover"
+                            />
+                          ) : (
+                            <video
+                              src={previewUrl}
+                              controls
+                              className="w-full h-40 object-cover"
+                            />
+                          )}
+                          <div className="absolute top-1 right-1">
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => removeFile(index)}
+                            >
+                              ×
+                            </Button>
+                          </div>
+                          <div className="p-2 text-xs text-muted-foreground">
+                            {file.name} <br />
+                            {(file.size / 1024 / 1024).toFixed(1)} MB
+                          </div>
                         </div>
-                        <p className="text-xs text-muted-foreground">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -333,7 +412,7 @@ export default function ReportIssuePage() {
         </Card>
       )}
 
-      {/* Step 2: AI Processing */}
+      {/* Step 2 */}
       {step === 2 && (
         <Card>
           <CardContent className="p-8 text-center">
@@ -346,10 +425,9 @@ export default function ReportIssuePage() {
         </Card>
       )}
 
-      {/* Step 3: Review & Submit */}
+      {/* Step 3 */}
       {step === 3 && (
         <div className="space-y-6">
-          {/* AI Results */}
           {triageResult && (
             <Alert>
               <CheckCircle className="h-4 w-4" />
@@ -365,13 +443,11 @@ export default function ReportIssuePage() {
             <Alert>
               <AlertTriangle className="h-4 w-4" />
               <AlertDescription>
-                Similar issue detected! This might be a duplicate of case #{dedupeResult.masterCaseId}. Your report will
-                be merged with the existing case to avoid duplication.
+                Similar issue detected! This might be a duplicate of case #{dedupeResult.masterCaseId}.
               </AlertDescription>
             </Alert>
           )}
 
-          {/* Final Review */}
           <Card>
             <CardHeader>
               <CardTitle>Review Your Report</CardTitle>
@@ -390,7 +466,13 @@ export default function ReportIssuePage() {
               <div>
                 <Label className="text-sm font-medium">Severity</Label>
                 <Badge
-                  className={`${formData.severity >= 4 ? "bg-red-100 text-red-800" : formData.severity >= 3 ? "bg-yellow-100 text-yellow-800" : "bg-blue-100 text-blue-800"}`}
+                  className={`${
+                    formData.severity >= 4
+                      ? "bg-red-100 text-red-800"
+                      : formData.severity >= 3
+                      ? "bg-yellow-100 text-yellow-800"
+                      : "bg-blue-100 text-blue-800"
+                  }`}
                 >
                   {SEVERITY_LABELS[formData.severity]}
                 </Badge>
