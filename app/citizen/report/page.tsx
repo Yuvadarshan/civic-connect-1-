@@ -146,7 +146,7 @@ export default function ReportIssuePage() {
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
     const address = await fetchAddress(formData.location.lat, formData.location.lng)
-    const mapImageUrl = `https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s+ff0000(${formData.location.lng},${formData.location.lat})/${formData.location.lng},${formData.location.lat},15/300x300?access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}`
+    const mapImageUrl = `https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s+ff0000(${formData.location.lng},${formData.location.lat})/${formData.location.lng},${formData.location.lat},15/300x300?access_token=${'pk.eyJ1IjoieXV2YWRhcnNoYW4iLCJhIjoiY21maDEwNGplMDZ3dzJtczl6bzJvbThybyJ9.MKoAP7SFszLllaIeUSc1Hw'}`
 
 
     // Add placeholders
