@@ -1,6 +1,6 @@
 // Enhanced AI engine for more sophisticated triage and deduplication
 
-import type { Ticket, Category, Severity, AITriageResponse, AIDedupeResponse, GeoLocation } from "../../types"
+import type { Ticket, Category, Severity, AITriageResponse, AIDedupeResponse, GeoLocation } from "../types"
 import { calculateDistance } from "./geo"
 import { comparePhash, generatePhash } from "./phash"
 
@@ -101,11 +101,11 @@ export class AITriageEngine {
 
     // Check for severity indicators in text
     if (this.severityIndicators.critical.some((word) => text.includes(word))) {
-      severityScore = Math.max(severityScore, 4) as Severity
+      severityScore = Math.max(severityScore, 4)
     } else if (this.severityIndicators.high.some((word) => text.includes(word))) {
-      severityScore = Math.max(severityScore, 3) as Severity
+      severityScore = Math.max(severityScore, 3)
     } else if (this.severityIndicators.low.some((word) => text.includes(word))) {
-      severityScore = Math.min(severityScore, 2) as Severity
+      severityScore = Math.min(severityScore, 2)
     }
 
     // Category-specific severity adjustments

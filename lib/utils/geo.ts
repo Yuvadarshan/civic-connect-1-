@@ -1,6 +1,6 @@
 // Geolocation utilities
 
-import type { GeoLocation } from "../../types"
+import type { GeoLocation } from "../types"
 
 export function calculateDistance(point1: GeoLocation, point2: GeoLocation): number {
   const R = 6371 // Earth's radius in kilometers

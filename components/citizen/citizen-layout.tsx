@@ -123,6 +123,11 @@ export function CitizenLayout({ children }: CitizenLayoutProps) {
             </div>
 
             <div className="flex items-center gap-4">
+              <Link href="/citizen/login">
+                <Button variant="outline" size="sm">
+                  Citizen Portal
+                </Button>
+              </Link>
               <Button variant="ghost" size="sm" className="relative">
                 <Bell className="h-4 w-4" />
                 <Badge className="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-secondary text-secondary-foreground text-xs flex items-center justify-center p-0">
