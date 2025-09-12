@@ -14,6 +14,7 @@ export type Category =
   | "ParkEquipment"
   | "FallenTree"
   | "Encroachment"
+  | "Others"
 
 export type TicketStatus = "Submitted" | "Acknowledged" | "In-Progress" | "Resolved"
 

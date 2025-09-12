@@ -18,6 +18,12 @@ import { CATEGORIES, WARDS, SEVERITY_LABELS } from "@/lib/constants"
 import { Camera, MapPin, Upload, AlertTriangle, CheckCircle, Loader2 } from "lucide-react"
 import type { Category, Severity } from "@/types"
 
+type MediaFile = {
+  file: File
+  preview: string
+  isProcessing: boolean
+}
+
 export default function ReportIssuePage() {
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -31,15 +37,31 @@ export default function ReportIssuePage() {
     category: "" as Category | "",
     severity: 3 as Severity,
     ward: "",
-    location: { lat: 28.6139, lng: 77.209 }, // Default to Delhi
+    location: { lat: 28.6139, lng: 77.209 }, // Default: Delhi
   })
 
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [selectedFiles, setSelectedFiles] = useState<MediaFile[]>([])
   const [step, setStep] = useState(1)
   const [locationStatus, setLocationStatus] = useState<"idle" | "loading" | "success" | "error">("idle")
 
-  // --- Helper: Stamp GPS on image ---
-  const addGeoStampToImage = async (file: File, lat: number, lng: number): Promise<File> => {
+  // --- Fetch address from OpenStreetMap ---
+  const fetchAddress = async (lat: number, lng: number): Promise<string> => {
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`)
+      const data = await res.json()
+      return data.display_name || "Unknown location"
+    } catch {
+      return "Unknown location"
+    }
+  }
+
+  // --- Add overlay with map + address + coords (fallback if map fails) ---
+  const addMapOverlayToImage = async (
+    file: File,
+    location: { lat: number; lng: number },
+    address: string,
+    mapImageUrl: string
+  ): Promise<File> => {
     return new Promise((resolve) => {
       const img = new Image()
       const reader = new FileReader()
@@ -55,47 +77,102 @@ export default function ReportIssuePage() {
         canvas.width = img.width
         canvas.height = img.height
 
-        // Draw original image
         ctx.drawImage(img, 0, 0)
 
-        // Add GPS text overlay
-        ctx.font = "48px Arial"
-        ctx.fillStyle = "yellow"
-        ctx.strokeStyle = "black"
-        ctx.lineWidth = 3
-        const text = `Lat: ${lat.toFixed(5)}, Lng: ${lng.toFixed(5)}`
-        const x = 20
-        const y = canvas.height - 40
-        ctx.strokeText(text, x, y)
-        ctx.fillText(text, x, y)
+        // Background card
+        const cardHeight = 200
+        ctx.fillStyle = "rgba(0,0,0,0.65)"
+        ctx.fillRect(0, canvas.height - cardHeight, canvas.width, cardHeight)
 
-        canvas.toBlob((blob) => {
-          if (blob) {
-            const stampedFile = new File([blob], file.name, { type: file.type })
-            resolve(stampedFile)
-          } else {
-            resolve(file)
+        // Try to load map
+        const mapImg = new Image()
+        mapImg.crossOrigin = "anonymous"
+        mapImg.src = mapImageUrl
+
+        const drawText = () => {
+          ctx.fillStyle = "white"
+          ctx.font = "28px Arial"
+
+          // Address wrap
+          const maxWidth = canvas.width - 200
+          const words = address.split(" ")
+          const lines: string[] = []
+          let line = ""
+          for (let word of words) {
+            const testLine = line + word + " "
+            if (ctx.measureText(testLine).width > maxWidth) {
+              lines.push(line)
+              line = word + " "
+            } else {
+              line = testLine
+            }
           }
-        }, file.type)
+          lines.push(line)
+
+          lines.forEach((l, i) => {
+            ctx.fillText(l.trim(), 190, canvas.height - cardHeight + 50 + i * 30)
+          })
+
+          // Coords
+          ctx.fillText(
+            `Lat: ${location.lat.toFixed(5)}, Lng: ${location.lng.toFixed(5)}`,
+            190,
+            canvas.height - 40
+          )
+
+          canvas.toBlob((blob) => {
+            if (blob) {
+              resolve(new File([blob], file.name, { type: file.type }))
+            } else {
+              resolve(file)
+            }
+          }, file.type)
+        }
+
+        mapImg.onload = () => {
+          ctx.drawImage(mapImg, 20, canvas.height - cardHeight + 25, 150, 150)
+          drawText()
+        }
+
+        mapImg.onerror = () => {
+          // No map, still stamp text
+          drawText()
+        }
       }
     })
   }
 
-  // --- File selection ---
+  // --- Handle file upload with geo overlay ---
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
-    const processedFiles: File[] = []
+    const address = await fetchAddress(formData.location.lat, formData.location.lng)
+    const mapImageUrl = `https://staticmap.openstreetmap.de/staticmap.php?center=${formData.location.lat},${formData.location.lng}&zoom=15&size=300x300&markers=${formData.location.lat},${formData.location.lng},red-pushpin`
 
-    for (const file of files) {
+    // Add placeholders
+    const placeholders: MediaFile[] = files.map((file) => ({
+      file,
+      preview: URL.createObjectURL(file),
+      isProcessing: true,
+    }))
+    setSelectedFiles((prev) => [...prev, ...placeholders].slice(0, 3))
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      let finalFile = file
       if (file.type.startsWith("image/")) {
-        const stamped = await addGeoStampToImage(file, formData.location.lat, formData.location.lng)
-        processedFiles.push(stamped)
-      } else {
-        processedFiles.push(file)
+        finalFile = await addMapOverlayToImage(file, formData.location, address, mapImageUrl)
       }
-    }
+      const previewUrl = URL.createObjectURL(finalFile)
 
-    setSelectedFiles((prev) => [...prev, ...processedFiles].slice(0, 3))
+      setSelectedFiles((prev) => {
+        const updated = [...prev]
+        const index = updated.findIndex((p) => p.preview === placeholders[i].preview)
+        if (index !== -1) {
+          updated[index] = { file: finalFile, preview: previewUrl, isProcessing: false }
+        }
+        return updated
+      })
+    }
   }
 
   const removeFile = (index: number) => {
@@ -117,10 +194,7 @@ export default function ReportIssuePage() {
           }))
           setLocationStatus("success")
         },
-        (error) => {
-          console.error("Geolocation error:", error)
-          setLocationStatus("error")
-        },
+        () => setLocationStatus("error"),
         { enableHighAccuracy: true, timeout: 10000 }
       )
     } else {
@@ -132,20 +206,17 @@ export default function ReportIssuePage() {
   const handleAIProcessing = async () => {
     if (!formData.category || !formData.title) return
     setStep(2)
-
     await performTriage({
       category: formData.category,
       title: formData.title,
       description: formData.description,
       geo: formData.location,
     })
-
     await checkDuplicate({
       category: formData.category,
       geo: formData.location,
       title: formData.title,
     })
-
     setStep(3)
   }
 
@@ -159,362 +230,127 @@ export default function ReportIssuePage() {
       severity: formData.severity,
       ward: formData.ward,
       geo: formData.location,
-      media: selectedFiles.map((file, index) => ({
+      media: selectedFiles.map((item, index) => ({
         id: `media-${Date.now()}-${index}`,
-        uri: URL.createObjectURL(file),
-        type: file.type.startsWith("image/") ? ("image" as const) : ("video" as const),
-        size: file.size,
+        uri: item.preview,
+        type: item.file.type.startsWith("image/") ? "image" : "video",
+        size: item.file.size,
       })),
     }
-
     const ticket = await createTicket(ticketData)
-    if (ticket) {
-      router.push(`/citizen/reports?new=${ticket.id}`)
-    }
+    if (ticket) router.push(`/citizen/reports?new=${ticket.id}`)
   }
 
-  const canProceed = formData.title && formData.category && formData.ward
+  const canProceed = formData.title && formData.category && formData.ward && selectedFiles.every(f => !f.isProcessing)
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      {/* Header */}
       <div className="text-center">
-        <h1 className="text-2xl font-bold text-foreground mb-2">Report an Issue</h1>
+        <h1 className="text-2xl font-bold mb-2">Report an Issue</h1>
         <p className="text-muted-foreground">Help improve your community by reporting civic issues</p>
       </div>
 
-      {/* Steps */}
-      <div className="flex items-center justify-center space-x-4 mb-8">
-        {[1, 2, 3].map((stepNum) => (
-          <div key={stepNum} className="flex items-center">
-            <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                step >= stepNum ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-              }`}
-            >
-              {stepNum}
-            </div>
-            {stepNum < 3 && <div className={`w-12 h-0.5 mx-2 ${step > stepNum ? "bg-primary" : "bg-muted"}`} />}
-          </div>
-        ))}
-      </div>
-
-      {/* Step 1: Form */}
+      {/* Step 1 */}
       {step === 1 && (
         <Card>
-          <CardHeader>
-            <CardTitle>Issue Details</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle>Issue Details</CardTitle></CardHeader>
           <CardContent className="space-y-6">
+
             {/* Title */}
-            <div className="space-y-2">
+            <div>
               <Label htmlFor="title">Issue Title *</Label>
-              <Input
-                id="title"
-                placeholder="Brief description of the issue"
-                value={formData.title}
-                onChange={(e) => setFormData((prev) => ({ ...prev, title: e.target.value }))}
-              />
+              <Input id="title" value={formData.title}
+                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                placeholder="Brief description" />
             </div>
 
             {/* Category */}
-            <div className="space-y-2">
+            <div>
               <Label>Category *</Label>
-              <Select
-                value={formData.category}
-                onValueChange={(value) => setFormData((prev) => ({ ...prev, category: value as Category }))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select issue category" />
-                </SelectTrigger>
+              <Select value={formData.category}
+                onValueChange={(value) => setFormData({ ...formData, category: value as Category })}>
+                <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
                 <SelectContent>
-                  {CATEGORIES.map((category) => (
-                    <SelectItem key={category.value} value={category.value}>
-                      <span className="flex items-center gap-2">
-                        <span>{category.icon}</span>
-                        {category.label}
-                      </span>
-                    </SelectItem>
-                  ))}
+                  {CATEGORIES.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
 
-            {/* Severity */}
-            <div className="space-y-2">
-              <Label>Severity: {SEVERITY_LABELS[formData.severity]}</Label>
-              <Slider
-                value={[formData.severity]}
-                onValueChange={(value) => setFormData((prev) => ({ ...prev, severity: value[0] as Severity }))}
-                min={1}
-                max={5}
-                step={1}
-                className="w-full"
-              />
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>Low</span>
-                <span>Critical</span>
-              </div>
-            </div>
-
             {/* Ward */}
-            <div className="space-y-2">
+            <div>
               <Label>Ward *</Label>
-              <Select
-                value={formData.ward}
-                onValueChange={(value) => setFormData((prev) => ({ ...prev, ward: value }))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select your ward" />
-                </SelectTrigger>
+              <Select value={formData.ward}
+                onValueChange={(value) => setFormData({ ...formData, ward: value })}>
+                <SelectTrigger><SelectValue placeholder="Select ward" /></SelectTrigger>
                 <SelectContent>
-                  {WARDS.map((ward) => (
-                    <SelectItem key={ward} value={ward}>
-                      {ward}
-                    </SelectItem>
-                  ))}
+                  {WARDS.map(w => <SelectItem key={w} value={w}>{w}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
 
             {/* Location */}
-            <div className="space-y-2">
+            <div>
               <Label>Location</Label>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={getCurrentLocation}
-                  disabled={locationStatus === "loading"}
-                  className="flex items-center gap-2 bg-transparent"
-                >
-                  {locationStatus === "loading" ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <MapPin className="h-4 w-4" />
-                  )}
-                  Get Current Location
-                </Button>
-                {locationStatus === "success" && (
-                  <Badge variant="secondary" className="bg-green-100 text-green-800">
-                    <CheckCircle className="h-3 w-3 mr-1" />
-                    Location captured
-                  </Badge>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">
+              <Button onClick={getCurrentLocation} disabled={locationStatus==="loading"}>
+                {locationStatus==="loading" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
+                Get Current Location
+              </Button>
+              <p className="text-xs">
                 Current: {formData.location.lat.toFixed(6)}, {formData.location.lng.toFixed(6)}
               </p>
             </div>
 
-            {/* Description */}
-            <div className="space-y-2">
-              <Label htmlFor="description">Description</Label>
-              <Textarea
-                id="description"
-                placeholder="Provide more details about the issue..."
-                value={formData.description}
-                onChange={(e) => setFormData((prev) => ({ ...prev, description: e.target.value }))}
-                rows={4}
-              />
-            </div>
-
             {/* Media Upload */}
-            <div className="space-y-2">
-              <Label>Photos/Videos (Optional)</Label>
-              <div className="space-y-4">
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-2"
-                  >
-                    <Camera className="h-4 w-4" />
-                    Add Photos
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-2"
-                  >
-                    <Upload className="h-4 w-4" />
-                    Upload Files
-                  </Button>
-                </div>
+            <div>
+              <Label>Photos/Videos</Label>
+              <Button onClick={() => fileInputRef.current?.click()}><Camera className="h-4 w-4" /> Upload</Button>
+              <input ref={fileInputRef} type="file" multiple accept="image/*,video/*"
+                onChange={handleFileSelect} className="hidden" />
 
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*,video/*"
-                  multiple
-                  onChange={handleFileSelect}
-                  className="hidden"
-                />
-
-                {/* Geo-tag Preview Section */}
-                {selectedFiles.length > 0 && (
-                  <div className="grid grid-cols-2 gap-4 mt-4">
-                    {selectedFiles.map((file, index) => {
-                      const previewUrl = URL.createObjectURL(file)
-                      return (
-                        <div
-                          key={index}
-                          className="relative border border-border rounded-lg overflow-hidden shadow-md"
-                        >
-                          {file.type.startsWith("image/") ? (
-                            <img
-                              src={previewUrl}
-                              alt={file.name}
-                              className="w-full h-40 object-cover"
-                            />
-                          ) : (
-                            <video
-                              src={previewUrl}
-                              controls
-                              className="w-full h-40 object-cover"
-                            />
-                          )}
-                          <div className="absolute top-1 right-1">
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => removeFile(index)}
-                            >
-                              ×
-                            </Button>
-                          </div>
-                          <div className="p-2 text-xs text-muted-foreground">
-                            {file.name} <br />
-                            {(file.size / 1024 / 1024).toFixed(1)} MB
-                          </div>
+              {selectedFiles.length > 0 && (
+                <div className="grid grid-cols-2 gap-4 mt-4">
+                  {selectedFiles.map((item, i) => (
+                    <div key={i} className="relative border rounded-lg overflow-hidden">
+                      {item.isProcessing && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
+                          <Loader2 className="h-6 w-6 animate-spin text-white" />
                         </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
+                      )}
+                      {item.file.type.startsWith("image/") ?
+                        <img src={item.preview} alt="preview" className="w-full h-40 object-cover" /> :
+                        <video src={item.preview} controls className="w-full h-40 object-cover" />}
+                      <Button className="absolute top-1 right-1" variant="destructive" size="sm"
+                        onClick={() => removeFile(i)}>×</Button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <Button onClick={handleAIProcessing} disabled={!canProceed || aiLoading} className="w-full">
-              {aiLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                "Continue"
-              )}
+              {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Continue"}
             </Button>
+
           </CardContent>
         </Card>
       )}
 
       {/* Step 2 */}
       {step === 2 && (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-primary" />
-            <h3 className="text-lg font-semibold mb-2">Processing Your Report</h3>
-            <p className="text-muted-foreground">
-              Our AI is analyzing your report for categorization and checking for duplicates...
-            </p>
-          </CardContent>
-        </Card>
+        <Card><CardContent className="p-8 text-center">
+          <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4" />
+          <p>Analyzing your report...</p>
+        </CardContent></Card>
       )}
 
       {/* Step 3 */}
       {step === 3 && (
-        <div className="space-y-6">
-          {triageResult && (
-            <Alert>
-              <CheckCircle className="h-4 w-4" />
-              <AlertDescription>
-                AI Analysis: Categorized as <strong>{triageResult.category}</strong> with{" "}
-                <strong>{SEVERITY_LABELS[triageResult.severity]}</strong> severity. Estimated resolution:{" "}
-                <strong>{triageResult.eta}</strong>
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {dedupeResult?.isDuplicate && (
-            <Alert>
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription>
-                Similar issue detected! This might be a duplicate of case #{dedupeResult.masterCaseId}.
-              </AlertDescription>
-            </Alert>
-          )}
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Review Your Report</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label className="text-sm font-medium">Title</Label>
-                <p className="text-sm">{formData.title}</p>
-              </div>
-
-              <div>
-                <Label className="text-sm font-medium">Category</Label>
-                <p className="text-sm">{formData.category}</p>
-              </div>
-
-              <div>
-                <Label className="text-sm font-medium">Severity</Label>
-                <Badge
-                  className={`${
-                    formData.severity >= 4
-                      ? "bg-red-100 text-red-800"
-                      : formData.severity >= 3
-                      ? "bg-yellow-100 text-yellow-800"
-                      : "bg-blue-100 text-blue-800"
-                  }`}
-                >
-                  {SEVERITY_LABELS[formData.severity]}
-                </Badge>
-              </div>
-
-              <div>
-                <Label className="text-sm font-medium">Ward</Label>
-                <p className="text-sm">{formData.ward}</p>
-              </div>
-
-              {formData.description && (
-                <div>
-                  <Label className="text-sm font-medium">Description</Label>
-                  <p className="text-sm">{formData.description}</p>
-                </div>
-              )}
-
-              {selectedFiles.length > 0 && (
-                <div>
-                  <Label className="text-sm font-medium">Attachments</Label>
-                  <p className="text-sm">{selectedFiles.length} file(s) attached</p>
-                </div>
-              )}
-
-              <div className="flex gap-2 pt-4">
-                <Button variant="outline" onClick={() => setStep(1)}>
-                  Edit Report
-                </Button>
-                <Button onClick={handleSubmit} disabled={ticketLoading} className="flex-1">
-                  {ticketLoading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Submitting...
-                    </>
-                  ) : (
-                    "Submit Report"
-                  )}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <Card><CardContent>
+          <h3>Review & Submit</h3>
+          <Button onClick={handleSubmit} disabled={ticketLoading}>
+            {ticketLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Submit"}
+          </Button>
+        </CardContent></Card>
       )}
     </div>
   )
